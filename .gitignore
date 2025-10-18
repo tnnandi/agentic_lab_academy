@@ -1,0 +1,4 @@
+academy_env/
+ollama/
+*.tgz
+__pycache__/
