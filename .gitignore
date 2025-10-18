@@ -2,3 +2,6 @@ academy_env/
 ollama/
 *.tgz
 __pycache__/
+output_agent/
+workspace_runs/
+workflows/
