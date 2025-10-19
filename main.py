@@ -87,5 +87,5 @@ def main(argv: Sequence[str] | None = None) -> None:
     asyncio.run(_run_from_args(args))
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":  
     main()
