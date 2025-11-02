@@ -10,6 +10,8 @@ from typing import Sequence
 from academy.exchange import LocalExchangeFactory
 from academy.manager import Manager
 
+from pdb import set_trace
+
 try:
     from ..academy_agents import (
         BrowsingAgent,
@@ -36,6 +38,9 @@ except ImportError:
     from config import MAX_ROUNDS
     from models import CodeArtifact, CritiqueBundle, ExecutionResult, PlanResult, ResearchArtifact
     import utils
+
+
+MAX_EXECUTION_ATTEMPTS = 3
 
 
 async def _to_thread(func, *args):
@@ -102,6 +107,7 @@ async def run_workflow(
             files_dir_content=files_dir_content,
         )
 
+        # Let the PI create the initial plan
         plan_dict = await pi.create_plan(sources=sources, topic=topic, mode=mode)
         plan = PlanResult.from_dict(plan_dict)
 
@@ -174,22 +180,50 @@ async def run_workflow(
                     )
                 code_artifact = CodeArtifact.from_dict(code_dict)
 
-                exec_dict = await code_executor.execute_code(
-                    code=code_artifact.code,
-                    working_directory=str(workdir),
-                    iteration=iteration,
-                    conda_env_path=conda_env,
-                )
-                execution_result = ExecutionResult.from_dict(exec_dict)
+                execution_result: ExecutionResult | None = None
+                execution_transcript = ""
 
-                execution_transcript = (
-                    f"SUCCESS: {execution_result.success}\n"
-                    f"STDOUT:\n{execution_result.stdout}\n\n"
-                    f"STDERR:\n{execution_result.stderr}\n\n"
-                    f"PACKAGES_INSTALLED: {execution_result.packages_installed or []}\n"
-                )
+                for attempt in range(1, MAX_EXECUTION_ATTEMPTS + 1):
+                    exec_dict = await code_executor.execute_code(
+                        code=code_artifact.code,
+                        working_directory=str(workdir),
+                        iteration=iteration,
+                        conda_env_path=conda_env,
+                    )
+                    execution_result = ExecutionResult.from_dict(exec_dict)
 
-                if not execution_result.success:
+                    execution_transcript = (
+                        f"SUCCESS: {execution_result.success}\n"
+                        f"STDOUT:\n{execution_result.stdout}\n\n"
+                        f"STDERR:\n{execution_result.stderr}\n\n"
+                        f"PACKAGES_INSTALLED: {execution_result.packages_installed or []}\n"
+                    )
+
+                    if execution_result.success:
+                        break
+
+                    feedback = (
+                        f"The execution attempt {attempt}/{MAX_EXECUTION_ATTEMPTS} failed. "
+                        "Update the code to address the issues shown in this transcript:\n"
+                        f"{execution_transcript}"
+                    )
+
+                    improved_dict = await code_writer.improve_code(
+                        code=code_artifact.code,
+                        feedback=feedback,
+                        iteration=iteration,
+                    )
+                    improved_artifact = CodeArtifact.from_dict(improved_dict)
+
+                    if improved_artifact.code == code_artifact.code:
+                        # No progress from code writer; rely on reviewer fallback below.
+                        break
+
+                    code_artifact = improved_artifact
+
+                    # set_trace()
+
+                if execution_result and not execution_result.success:
                     review = await code_reviewer.review_code(code_artifact.code, execution_transcript)
                     improved_code = utils.extract_code_only(review)
                     if improved_code and improved_code != code_artifact.code:

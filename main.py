@@ -24,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the Agentic Lab workflow using Academy agents.")
     parser.add_argument("--topic", required=True, help="Specify the research topic.")
     parser.add_argument("--pdfs", nargs="+", help="One or more PDF files to include in the research.")
-    parser.add_argument("--links", nargs="+", help="One or more URLs to include in the research.")
+    parser.add_argument("--links", nargs="+", help="One or more URLs to include in the research (e.g., link to geneformer example files on HF).")
     parser.add_argument(
         "--files_dir",
         help="Path to a directory containing files to analyse and summarise for the agents.",

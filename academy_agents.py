@@ -74,7 +74,7 @@ class PrincipalInvestigatorAgent(Agent):
         return PlanResult(plan=plan, reasoning=reasoning).to_dict()
 
 
-class BrowsingAgent(Agent):
+class BrowsingAgent(Agent):     #TN: Can add BioMCP here for searching pubmed 
     def __init__(self, *, verbose: bool = True) -> None:
         super().__init__()
         self.verbose = verbose

@@ -1,6 +1,6 @@
 """Configuration for the Academy-powered Agentic Lab."""
 
-MAX_ROUNDS = 1
+MAX_ROUNDS = 3
 
 LLM_CONFIG = {
     "default_model": "gpt-oss:20b",
