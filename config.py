@@ -1,10 +1,16 @@
-"""Configuration for the Academy-powered Agentic Lab."""
+"""Configuration for the Academy-powered Agentic Lab with flexible LLM backends."""
 
 MAX_ROUNDS = 3
 
+# Supported sources:
+#   - "ollama": local Ollama REST API (default)
+#   - "alcf_sophia": ALCF inference endpoint (Sophia/vLLM)
+#   - "alcf_metis": ALCF inference endpoint (Metis/OpenAI-compatible)
 LLM_CONFIG = {
-    "default_model": "gpt-oss:20b",
-    # "default_model": "llama3.1:8b",
+    # "source": "ollama",
+    "source": "alcf_sophia",
+    # "source": "alcf_metis",
+    "default_model": "openai/gpt-oss-120b", #"gpt-oss:20b",
     "temperature": {
         "research": 0.3,
         "coding": 0.2,

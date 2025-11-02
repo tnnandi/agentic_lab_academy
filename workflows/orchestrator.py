@@ -153,6 +153,10 @@ async def run_workflow(
             if mode in {"code_only", "both"}:
                 if iteration == 0 or not code_artifact:
                     coding_plan = await code_writer.create_coding_plan(sources, topic, plan.plan)
+                    print("\n" + "=" * 80)
+                    print("CodeWriterAgent proposed coding plan:\n")
+                    print(coding_plan.strip())
+                    print("=" * 80 + "\n")
                     while True:
                         approved = (
                             await _to_thread(input, "CodeWriter: Approve coding plan? (y/n): ")
