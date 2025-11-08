@@ -179,7 +179,7 @@ class CodeWriterAgent(Agent):
     @action
     async def improve_coding_plan(self, feedback: str, coding_plan: str) -> str:
         if self.verbose:
-            print("CodeWriterAgent: improving coding plan based on feedback")
+            print(f"CodeWriterAgent: improving coding plan based on feedback: {feedback}")
         prompt = prompts.get_improved_coding_plan_prompt(feedback, coding_plan)
         return await query_llm_async(prompt, temperature=LLM_CONFIG["temperature"]["coding"])
 
@@ -196,7 +196,9 @@ class CodeWriterAgent(Agent):
         response = await query_llm_async(prompt, temperature=LLM_CONFIG["temperature"]["coding"])
         code = utils.extract_code_only(response)
         if self.verbose:
-            print("CodeWriterAgent produced code (truncated):\n", code[:800])
+            print("CodeWriterAgent produced code (truncated):\n", code[:80])
+            # print("CodeWriterAgent produced code :\n", code)
+
         return CodeArtifact(code=code, iteration=iteration).to_dict()
 
     @action
@@ -205,7 +207,8 @@ class CodeWriterAgent(Agent):
         response = await query_llm_async(prompt, temperature=LLM_CONFIG["temperature"]["coding"])
         improved = utils.extract_code_only(response)
         if self.verbose:
-            print("CodeWriterAgent improved code (truncated):\n", improved[:800])
+            print("CodeWriterAgent improved code (truncated):\n", improved[:80])
+            # print("CodeWriterAgent improved code :\n", improved)
         return CodeArtifact(code=improved, iteration=iteration).to_dict()
 
 
@@ -305,12 +308,24 @@ class CodeExecutorAgent(Agent):
                 if installed:
                     result = await self._run_subprocess([python_exe, str(script_path)], workdir)
 
+        reasoning = None
+        if result.returncode != 0:
+            analysis_prompt = prompts.get_execution_failure_reasoning_prompt(
+                code, result.stdout, result.stderr
+            )
+            reasoning = await query_llm_async(
+                analysis_prompt, temperature=LLM_CONFIG["temperature"]["execution"]
+            )
+            if self.verbose:
+                print("CodeExecutorAgent reasoning about failure:\n", reasoning)
+
         execution = ExecutionResult(
             success=result.returncode == 0,
             stdout=result.stdout,
             stderr=result.stderr,
             error_type=None if result.returncode == 0 else "execution_error",
             packages_installed=packages_installed or None,
+            reasoning=reasoning,
         )
         return execution.to_dict()
 
