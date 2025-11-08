@@ -22,6 +22,7 @@ __all__ = [
     "get_package_feedback_processing_prompt",
     "get_package_resolution_prompt",
     "get_file_path_validation_prompt",
+    "get_execution_failure_reasoning_prompt",
 ]
 
 
@@ -182,13 +183,11 @@ def get_coding_plan_prompt(sources: str, topic: str, plan_section: str = "") -> 
         "   - Use the actual file paths directly in the code\n"
         "   - Include proper validation and error handling\n"
         "   - Check if files/directories exist before using them\n"
-        "   - Use simple filenames like 'R0_matrix.mtx' instead of complex paths\n\n"
         "6. FILE PATH PLANNING:\n"
         "   - Plan to extract actual file paths from the sources\n"
         "   - Plan to include file existence validation\n"
         "   - Plan to handle missing files gracefully\n"
         "   - Plan to use reasonable defaults if no specific paths are mentioned\n"
-        "   - Plan to use simple, common filenames (e.g., 'R0_matrix.mtx')\n"
         "   - Plan to include clear error messages when files are missing\n\n"
         "Provide a clear, step-by-step plan that a user can review and approve before you write the actual code."
         "DO NOT include anything that hasn't been asked for even though it might be in the sources."
@@ -228,6 +227,20 @@ def get_file_path_validation_prompt() -> str:
     )
 
 
+def get_execution_failure_reasoning_prompt(code: str, stdout: str, stderr: str) -> str:
+    return (
+        "The following Python code failed to execute. Analyze the failure and provide actionable guidance.\n\n"
+        f"--- Code ---\n{code}\n\n"
+        f"--- Standard Output ---\n{stdout if stdout else 'N/A'}\n\n"
+        f"--- Standard Error ---\n{stderr if stderr else 'N/A'}\n\n"
+        "Provide your response with the following structure:\n"
+        "1. Root Cause Analysis: <succinct explanation>\n"
+        "2. Recommended Fixes: <numbered list of actionable steps>\n"
+        "3. Verification: <how to confirm the issue is resolved>\n"
+        "Return only the above, without any internal reasoning or markdown fences."
+    )
+
+
 def get_code_writing_prompt(sources: str, topic: str, plan_section: str, coding_plan: str) -> str:
     return (
         "You are a professional Python developer with a strong understanding of the Python programming language and its libraries. "
@@ -256,7 +269,7 @@ def get_code_writing_prompt(sources: str, topic: str, plan_section: str, coding_
         "   - '/path/to/files', '/path/to/actual/files', '/data/files'\n"
         "   - 'input_dir', 'output_dir', 'data_dir'\n"
         "   - Any generic placeholder paths\n"
-        "   - Hardcoded paths that don't exist (like GSM8080315_sample1_R0_matrix.mtx)\n\n"
+        "   - Hardcoded paths that don't exist\n\n"
         "4. NEVER USE COMMAND LINE ARGUMENTS:\n"
         "   - sys.argv, sys.argv[1], argparse, ArgumentParser()\n"
         "   - --input_dir, --output_dir, or any command line flags\n"
@@ -280,24 +293,12 @@ def get_code_writing_prompt(sources: str, topic: str, plan_section: str, coding_
         "- Use appropriate libraries based on the task and file types mentioned.\n"
         "- Include comments in the code to explain steps.\n"
         "- Add file path validation and error handling.\n"
-        "6. EXAMPLE OF USING FULL FILE PATHS FROM SOURCES:\n"
-        "```python\n"
-        "import os\n\n"
-        "# If sources show files in '/path/to/data/directory/', use the FULL path:\n"
-        "matrix_file = '/path/to/data/directory/data_matrix.mtx'\n"
-        "features_file = '/path/to/data/directory/data_features.tsv'\n"
-        "barcodes_file = '/path/to/data/directory/data_barcodes.tsv'\n\n"
-        "# Validate file existence\n"
-        "for file_path in [matrix_file, features_file, barcodes_file]:\n"
-        "    if not os.path.exists(file_path):\n"
-        "        raise FileNotFoundError(f'Missing file: {file_path}')\n"
-        "```\n\n"
-        "CRITICAL: NO PLACEHOLDERS OR FAKE IMPORTS:\n"
-        "- NEVER use placeholder imports. ALWAYS use actual imports from the sources.\n"
-        "- NEVER use fake function names or modules\n"
-        "- ONLY use real, working Python code that can be run directly\n"
-        "- ONLY import packages that actually exist\n"
-        "- If you don't know the exact import, use standard libraries or skip that part\n\n"
+        "6. CRITICAL: DO NOT USE PLACEHOLDERS OR FAKE IMPORTS:\n"
+        "7. NEVER use placeholder imports. ALWAYS use actual imports from the sources.\n"
+        "8. NEVER use fake function names or modules\n"
+        "9. ONLY use real, working Python code that can be run directly\n"
+        "10. ONLY import packages that actually exist\n"
+        "11. If you don't know the exact import, use standard libraries or skip that part\n\n"
     )
 
 
