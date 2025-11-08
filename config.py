@@ -11,6 +11,8 @@ LLM_CONFIG = {
     "source": "alcf_sophia",
     # "source": "alcf_metis",
     "default_model": "openai/gpt-oss-120b", #"gpt-oss:20b",
+    # "max_prompt_chars": 20000,
+    # "max_response_tokens": 1024,
     "temperature": {
         "research": 0.3,
         "coding": 0.2,
