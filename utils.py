@@ -16,8 +16,8 @@ import io
 import json
 
 
-def save_output(report, code, execution_result, iteration):
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+def save_output(report, code, execution_result, timestamp, iteration):
+    # timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = f"./output_agent/output_{timestamp}"
     os.makedirs(output_dir, exist_ok=True)
 
@@ -152,6 +152,55 @@ def process_pdfs(pdf_paths):
     )
     
     return formatted_pdfs
+
+
+# def process_pdfs(pdf_paths):
+#     """
+#     Process multiple PDF files and return their extracted text.
+#     """
+#     if not pdf_paths:
+#         return ""
+    
+#     pdf_contents = []
+#     # for pdf_path in pdf_paths:
+#     #     if os.path.exists(pdf_path):
+#     #         content = extract_pdf_text(pdf_path)
+#     #         pdf_contents.append(content)
+#     #     else:
+#     #         print(f"Warning: PDF file not found: {pdf_path}")
+
+#     def iter_pdf_files(paths):
+#         for path in paths:
+#             if not os.path.exists(path):
+#                 print(f"Warning: PDF file not found: {path}")
+#                 continue
+#             if os.path.isdir(path):
+#                 for root, _, files in os.walk(path):
+#                     for filename in sorted(files):
+#                         if filename.lower().endswith('.pdf'):
+#                             yield os.path.join(root, filename)
+#             else:
+#                 yield path
+
+#     for pdf_path in iter_pdf_files(pdf_paths):
+#         content = extract_pdf_text(pdf_path)
+#         pdf_contents.append(content)
+
+
+    
+#     if not pdf_contents:
+#         return ""
+    
+#     # Format PDF contents for inclusion in prompts
+#     formatted_pdfs = "\n\n".join(
+#         f"PDF: {content['filename']}\n"
+#         f"{'='*50}\n"
+#         f"{content['content']}\n"
+#         f"{'='*50}"
+#         for content in pdf_contents
+#     )
+    
+#     return formatted_pdfs
 
 
 def process_links(link_paths):
