@@ -52,6 +52,7 @@ class ExecutionResult(SerializableDataclass):
     stderr: str
     error_type: Optional[str] = None
     packages_installed: Optional[list[str]] = None
+    reasoning: Optional[str] = None
 
 
 @dataclass(slots=True)
