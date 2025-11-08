@@ -1,6 +1,7 @@
 import os
 import re
 from datetime import datetime
+from pathlib import Path
 from docx import Document
 from duckduckgo_search import DDGS
 from bs4 import BeautifulSoup
@@ -42,6 +43,23 @@ def save_output(report, code, execution_result, timestamp, iteration):
             f.write(execution_result)
 
     print(f"\nOutputs saved for iteration {iteration + 1} in {output_dir}")
+
+
+def append_conversation_log(log_path, role, message, iteration=None, metadata=None):
+    """
+    Append a JSON line capturing inter-agent communications for later auditing.
+    """
+    entry = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "role": role,
+        "iteration": iteration,
+        "message": message,
+        "metadata": metadata or {},
+    }
+    path = Path(log_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry) + "\n")
 
 # function to clean up the report to conform to professional standards
 def clean_report(text):

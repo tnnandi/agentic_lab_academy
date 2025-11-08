@@ -69,7 +69,7 @@ async def run_workflow(
 ) -> None:
     
     def _format_pi_changes(feedback: CritiqueBundle | None) -> str | None:
-        """Summarize critic remarks so the PI can adjust the plan next round."""
+        """Summarize critic and executor remarks so the PI can adjust the plan next round."""
         if not feedback:
             return None
 
@@ -80,6 +80,9 @@ async def run_workflow(
             sections.append(f"Document feedback:\n{feedback.document_feedback}")
         if feedback.code_feedback:
             sections.append(f"Code feedback:\n{feedback.code_feedback}")
+        executor_notes = getattr(feedback, "executor_feedback", None)
+        if executor_notes:
+            sections.append(f"Executor diagnostics:\n{executor_notes}")
         return "\n\n".join(sections) if sections else None
 
     # Read content from the pdfs
@@ -95,6 +98,16 @@ async def run_workflow(
 
     workdir = Path.cwd() / "workspace_runs"
     workdir.mkdir(exist_ok=True)
+    conversation_log_path = workdir / f"conversation_log_{timestamp}.jsonl"
+
+    def _log_event(role: str, message: str, iteration_idx: int | None = None, metadata: dict | None = None) -> None:
+        utils.append_conversation_log(
+            log_path=conversation_log_path,
+            role=role,
+            message=message,
+            iteration=iteration_idx,
+            metadata=metadata or {},
+        )
 
     if verbose:
         print("Workspace for generated scripts:", workdir)
@@ -136,16 +149,27 @@ async def run_workflow(
         # Let the PI create the initial plan
         plan_dict = await pi.create_plan(sources=sources, topic=topic, mode=mode)
         plan = PlanResult.from_dict(plan_dict)
+        _log_event(
+            "PrincipalInvestigatorAgent",
+            "Initial plan created.",
+            metadata={"plan": plan.plan, "reasoning": plan.reasoning},
+        )
 
         while True:
             decision = (await _to_thread(input, "PI: Do you want to proceed with the plan? (y/n): ")).strip().lower()
             if decision == "y":
                 print("PI: User agreed to the plan.")
+                _log_event("User", "Approved plan.", metadata={"decision": decision})
                 break
             if decision == "n":
                 changes = await _to_thread(input, "PI: Please input the suggested changes: ")
                 plan_dict = await pi.create_plan(sources=sources, topic=topic, mode=mode, changes=changes)
                 plan = PlanResult.from_dict(plan_dict)
+                _log_event(
+                    "PrincipalInvestigatorAgent",
+                    "Plan updated based on user feedback.",
+                    metadata={"plan": plan.plan, "reasoning": plan.reasoning, "user_changes": changes},
+                )
                 continue
             print("PI: Invalid input. Please enter 'y' or 'n'.")
 
@@ -154,11 +178,17 @@ async def run_workflow(
         execution_result: ExecutionResult | None = None
         critic_feedback: CritiqueBundle | None = None
 
-        # 
         for iteration in range(MAX_ROUNDS):
             print("=" * 80)
             print(f"Iteration {iteration + 1}/{MAX_ROUNDS}")
             print("=" * 80)
+            _log_event(
+                "Orchestrator",
+                "Starting iteration.",
+                iteration,
+                {"max_rounds": MAX_ROUNDS, "plan_excerpt": plan.plan[:400]},
+            )
+            executor_reasoning_note = "Code path not executed this iteration."
 
             if mode in {"research_only", "both"}:
                 if iteration == 0 or not research_result:
@@ -176,8 +206,15 @@ async def run_workflow(
                         iteration=iteration,
                     )
                 research_result = ResearchArtifact.from_dict(research_dict)
+                _log_event(
+                    "ResearchAgent",
+                    "Produced research draft.",
+                    iteration,
+                    {"iteration": research_result.iteration, "excerpt": research_result.content[:600]},
+                )
 
             if mode in {"code_only", "both"}:
+                executor_reasoning_note = "Awaiting execution results."
                 if iteration == 0 or not code_artifact:
                     coding_plan = await code_writer.create_coding_plan(sources, topic, plan.plan)
                     print("\n" + "=" * 80)
@@ -207,13 +244,24 @@ async def run_workflow(
                         iteration=iteration,
                     )
                 else:
-                    feedback = critic_feedback.code_feedback if critic_feedback else ""
+                    feedback_sections: list[str] = []
+                    if critic_feedback and critic_feedback.executor_feedback:
+                        feedback_sections.append(f"Executor diagnostics:\n{critic_feedback.executor_feedback}")
+                    if critic_feedback and critic_feedback.code_feedback:
+                        feedback_sections.append(critic_feedback.code_feedback)
+                    feedback = "\n\n".join(feedback_sections)
                     code_dict = await code_writer.improve_code(
                         code=code_artifact.code,
                         feedback=feedback or "",
                         iteration=iteration,
                     )
                 code_artifact = CodeArtifact.from_dict(code_dict)
+                _log_event(
+                    "CodeWriterAgent",
+                    "Produced code artifact.",
+                    iteration,
+                    {"iteration": code_artifact.iteration, "code_preview": code_artifact.code[:600]},
+                )
 
                 execution_result: ExecutionResult | None = None
                 execution_transcript = ""
@@ -226,12 +274,29 @@ async def run_workflow(
                         conda_env_path=conda_env,
                     )
                     execution_result = ExecutionResult.from_dict(exec_dict)
+                    executor_reasoning_note = (
+                        execution_result.reasoning
+                        or f"Execution attempt {attempt} "
+                        f"{'succeeded' if execution_result.success else 'failed without detailed reasoning.'}"
+                    )
 
                     execution_transcript = (
                         f"SUCCESS: {execution_result.success}\n"
                         f"STDOUT:\n{execution_result.stdout}\n\n"
                         f"STDERR:\n{execution_result.stderr}\n\n"
                         f"PACKAGES_INSTALLED: {execution_result.packages_installed or []}\n"
+                    )
+                    _log_event(
+                        "CodeExecutorAgent",
+                        "Execution attempt completed.",
+                        iteration,
+                        {
+                            "attempt": attempt,
+                            "success": execution_result.success,
+                            "reasoning": execution_result.reasoning,
+                            "stdout": execution_result.stdout[:1000],
+                            "stderr": execution_result.stderr[:1000],
+                        },
                     )
 
                     if execution_result.success:
@@ -260,6 +325,12 @@ async def run_workflow(
                         break
 
                     code_artifact = improved_artifact
+                    _log_event(
+                        "CodeWriterAgent",
+                        "Refined code artifact after executor feedback.",
+                        iteration,
+                        {"code_preview": code_artifact.code[:600]},
+                    )
 
                     # set_trace()
 
@@ -268,17 +339,36 @@ async def run_workflow(
                     improved_code = utils.extract_code_only(review)
                     if improved_code and improved_code != code_artifact.code:
                         code_artifact = CodeArtifact(code=improved_code, iteration=iteration)
+                        _log_event(
+                            "CodeReviewerAgent",
+                            "Reviewer adjusted code after failed execution.",
+                            iteration,
+                            {"code_preview": code_artifact.code[:600]},
+                        )
 
             else:
                 execution_transcript = None
+                executor_reasoning_note = "Code path skipped due to selected mode."
 
             critic_dict = await critic.review_iteration(
                 report=research_result.content if research_result else None,
                 code=code_artifact.code if code_artifact else None,
                 execution_result=execution_transcript,
+                execution_reasoning=executor_reasoning_note,
                 sources=sources,
             )
             critic_feedback = CritiqueBundle.from_dict(critic_dict)
+            _log_event(
+                "CriticAgent",
+                "Provided iteration critique.",
+                iteration,
+                {
+                    "document_feedback": critic_feedback.document_feedback,
+                    "code_feedback": critic_feedback.code_feedback,
+                    "summary": critic_feedback.summary,
+                    "executor_feedback": getattr(critic_feedback, "executor_feedback", None),
+                },
+            )
 
             # Refresh the PI’s plan for the next iteration using the latest critic feedback.
             if iteration + 1 < MAX_ROUNDS:
@@ -291,6 +381,12 @@ async def run_workflow(
                         changes=plan_changes,
                     )
                     plan = PlanResult.from_dict(plan_dict)
+                    _log_event(
+                        "PrincipalInvestigatorAgent",
+                        "Updated plan after critic/executor feedback.",
+                        iteration,
+                        {"plan": plan.plan, "changes": plan_changes},
+                    )
 
             utils.save_output(
                 report=research_result.content if research_result else "",
@@ -298,6 +394,12 @@ async def run_workflow(
                 execution_result=execution_transcript or (execution_result.stdout if execution_result else ""),
                 timestamp=timestamp,
                 iteration=iteration,
+            )
+            _log_event(
+                "Orchestrator",
+                "Saved iteration artifacts.",
+                iteration,
+                {"timestamp": timestamp},
             )
 
             if execution_result and execution_result.success:

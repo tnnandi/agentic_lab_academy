@@ -365,6 +365,7 @@ class CriticAgent(Agent):
         code: str | None,
         execution_result: str | None,
         sources: str,
+        execution_reasoning: str | None = None,
     ) -> dict:
         report_feedback = None
         code_feedback = None
@@ -374,7 +375,9 @@ class CriticAgent(Agent):
             report_feedback = await query_llm_async(prompt, temperature=LLM_CONFIG["temperature"]["critic"])
 
         if code and execution_result is not None:
-            prompt = prompts.get_code_execution_review_prompt(code, execution_result)
+            prompt = prompts.get_code_execution_review_prompt(
+                code, execution_result, execution_reasoning
+            )
             code_feedback = await query_llm_async(prompt, temperature=LLM_CONFIG["temperature"]["critic"])
 
         summary = None
@@ -389,5 +392,6 @@ class CriticAgent(Agent):
             document_feedback=report_feedback,
             code_feedback=code_feedback,
             summary=summary,
+            executor_feedback=execution_reasoning,
         )
         return bundle.to_dict()

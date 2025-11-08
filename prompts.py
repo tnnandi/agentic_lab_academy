@@ -401,11 +401,14 @@ def get_document_critique_prompt(document: str, sources: str) -> str:
     )
 
 
-def get_code_execution_review_prompt(code: str, execution_result: str) -> str:
+def get_code_execution_review_prompt(
+    code: str, execution_result: str, execution_reasoning: str | None = None
+) -> str:
     return (
-        "Review this executed code and its result.\n\n"
+        "Review this executed code, the runtime output, and the executor's own reasoning about any failure.\n\n"
         f"Code:\n{code}\n\n"
         f"Execution Output:\n{execution_result}\n\n"
+        f"Executor Reasoning:\n{execution_reasoning or 'Executor did not supply additional reasoning.'}\n\n"
         "Provide a detailed analysis. If it failed, suggest corrections. If it worked, suggest optimizations or refactoring. Return suggested code in a ```python block``` if applicable."
     )
 

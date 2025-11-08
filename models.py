@@ -60,3 +60,4 @@ class CritiqueBundle(SerializableDataclass):
     document_feedback: Optional[str]
     code_feedback: Optional[str]
     summary: Optional[str]
+    executor_feedback: Optional[str] = None
