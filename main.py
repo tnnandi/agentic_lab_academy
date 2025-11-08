@@ -23,7 +23,10 @@ else:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the Agentic Lab workflow using Academy agents.")
     parser.add_argument("--topic", required=True, help="Specify the research topic.")
-    parser.add_argument("--pdfs", nargs="+", help="One or more PDF files to include in the research.")
+    parser.add_argument(
+        "--pdfs_dir",
+        help="Path to a directory of PDF files to include in the research.",
+    )
     parser.add_argument("--links", nargs="+", help="One or more URLs to include in the research (e.g., link to geneformer example files on HF).")
     parser.add_argument(
         "--files_dir",
@@ -64,11 +67,16 @@ def _validate_paths(paths: Sequence[str] | None, kind: str) -> list[str]:
 
 
 async def _run_from_args(args: argparse.Namespace) -> None:
-    pdfs = _validate_paths(args.pdfs, "PDF file") if args.pdfs else []
-    if args.files_dir and not Path(args.files_dir).exists():
-        raise FileNotFoundError(f"Files directory not found: {args.files_dir}")
+    pdfs: list[str] = []
+    if args.pdfs_dir:
+        pdfs_path = Path(args.pdfs_dir)
+        if not pdfs_path.exists():
+            raise FileNotFoundError(f"PDF directory not found: {pdfs_path}")
+        if not pdfs_path.is_dir():
+            raise NotADirectoryError(f"Expected a directory for --pdfs_dir, got: {pdfs_path}")
+        pdfs = [str(p) for p in sorted(pdfs_path.iterdir()) if p.is_file() and p.suffix.lower() == ".pdf"]
 
-    await run_workflow(
+    await run_workflow( # defined in orchestrator.py
         topic=args.topic,
         mode=args.mode,
         quick_search=args.quick_search,
