@@ -1,65 +1,133 @@
-# Agentic Lab (Academy Edition)
+# Agentic Lab 
 
-This project re-implements the original [Agentic Lab](../agentic_lab/README.md) multi-agent research framework using the [Academy](https://github.com/proxystore/academy) middleware. The goal is to preserve the collaborative research–coding workflow while expressing each role as an Academy `Agent` with well-defined asynchronous actions.
+Agentic Lab is a multi-agent research workflow built on top of the [Academy](https://github.com/proxystore/academy) middleware. Each role (principal investigator, researcher, coding, execution, review, critic) is modeled as an asynchronous Academy `Agent`, enabling reproducible, inspectable collaboration loops and streamlined switching between local execution and HPC submissions.
 
-## Highlights
+## Features
 
-- **Academy runtime** – agents communicate through an exchange managed by `academy.manager.Manager` with a `LocalExchangeFactory` backend.
-- **Stateful actors** – principal investigator, browsing, research, coding, execution, reviewing, and critic roles are implemented as distinct Academy agents.
-- **LLM-driven workflow** – reuses the prompts and utilities from the legacy project with pluggable LLM backends (local Ollama or the ALCF inference endpoints).
-- **Iterative refinement** – preserves the feedback loop between agents with explicit iteration state, code execution, and critic summaries routed through the manager.
-- **Workspace outputs** – reports, code, and execution logs are saved under `./output_agent/` within this project directory for each iteration.
+- **Composable agents** – every role is its own `academy.agent.Agent`, making prompts, state, and transitions auditable.
+- **Pluggable LLM backends** – configure `LLM_CONFIG` for Ollama, ALCF Sophia/Metis, or OpenRouter (e.g., `openrouter/polaris-alpha`).
+- **Human-in-the-loop checkpoints** – the CLI pauses at plan/coding milestones so you can approve or demand revisions before the agents proceed.
+- **Local + HPC execution** – the default `CodeExecutorAgent` runs code locally (and auto-installs missing packages); `HPCAgent` writes PBS scripts for ALCF Sophia, submits via `qsub`, polls `qstat`, and feeds log-derived reasoning back into the coding loop.
+- **Persistent artifacts** – research drafts, generated code, execution transcripts, and HPC logs land under `workspace_runs/` and `output_agent/` for each timestamped run.
 
 ## Repository Layout
 
 ```
 agentic_lab_academy/
-├── README.md
-├── requirements.txt
-├── pyproject.toml
-├── __init__.py
-├── academy_agents.py         # Academy Agent subclasses for each role
-├── config.py                 # Shared configuration (LLM defaults, etc.)
-├── llm.py                    # Sync + async helpers for querying configured LLM backends
-├── main.py                   # CLI entry point (mirrors legacy arguments)
-├── alcf_inference/           # Globus helper for authenticating with ALCF inference
-├── models.py                 # Dataclasses for agent message payloads
-├── prompts.py                # Prompt builders reused from the legacy project
-├── utils.py                  # PDF/link processing, DuckDuckGo search, persistence
-└── workflows/
-    ├── __init__.py
-    └── orchestrator.py       # Runs the multi-agent workflow via Manager
+├── README.md                     # You are here
+├── requirements.txt / pyproject  # Python dependencies
+├── main.py                       # CLI entrypoint
+├── academy_agents.py             # Agent implementations (PI, Research, Coding, HPCAgent, ...)
+├── workflows/orchestrator.py     # Async orchestration + human approval loop
+├── models.py                     # Dataclasses shared between agents
+├── prompts.py                    # Prompt builders reused from legacy Agentic Lab
+├── utils.py                      # PDF/link ingestion, searches, persistence helpers
+├── llm.py                        # Backend-agnostic query helpers
+├── config.py                     # `LLM_CONFIG` defaults
+└── workspace_runs/               # Timestamped run directories with logs, scripts, HPC outputs
 ```
 
-## Running the Framework
+## Agent Roles
 
-1. Install dependencies (Ollama or ALCF credentials required depending on backend):
+- **User / Human Operator** – supplies the topic, artifacts (PDFs, directories, URLs), and runtime flags; approves or rejects the PI and coding plans and determines when to stop iterating.
+- **Principal Investigator Agent** – converts the inputs into a multi-step execution plan and revises it when critic feedback or user requests demand changes.
+- **Browsing Agent** – aggregates PDFs, file directory summaries, and quick web searches into a unified "sources" digest for the rest of the workflow.
+- **Research Agent** – drafts and improves the narrative research report, grounding its text in the latest plan section and available sources.
+- **Code Writer Agent** – proposes a coding plan, generates runnable scripts, and applies execution or reviewer feedback to refine the code artifact each round.
+- **Code Executor Agent** – persists each script under `workspace_runs/run_<ts>/generated_code/`, runs it (optionally inside `--conda_env`), auto-installs missing packages, and captures stdout/stderr plus LLM-derived failure reasoning.
+- **HPCAgent (optional)** – when `--use_hpc` is set, writes Sophia-ready PBS scripts, submits them via `qsub`, polls `qstat`, reads the resulting `hpc_job_iterXX_YY` logs, and explains cluster-side failures before triggering another coding pass.
+- **Code Reviewer Agent** – inspects unsuccessful execution transcripts and proposes automated patches when the coding agent stalls.
+- **Critic Agent** – consolidates research quality, code health, and executor diagnostics into feedback that seeds the next PI plan.
+
+## Information Flow & Human Touchpoints
+
+```mermaid
+flowchart TD
+    User(("User<br/>CLI prompts & approvals"))
+    PI(("Principal Investigator Agent"))
+    Loop(("Human-in-the-loop<br/>Plan & Coding approvals"))
+    Browse(("Browsing Agent"))
+    Research(("Research Agent"))
+    CodeWriter(("Code Writer Agent"))
+    Executor(("Code Executor Agent<br/>(local or HPC)"))
+    Reviewer(("Code Reviewer Agent"))
+    Critic(("Critic Agent"))
+    Outputs(("Workspace Outputs<br/>reports / code / logs"))
+
+    User -->|Provide topic, PDFs, options| PI
+    User -->|Approve PI plan<br/>or request changes| Loop
+    Loop --> PI
+    PI -->|Plan & reasoning| Browse
+    Browse -->|Sources summary| PI
+    Browse --> Research
+    Research -->|Draft / improved report| Outputs
+    PI -->|Plan section| CodeWriter
+    User -->|Approve coding plan<br/>or give feedback| Loop
+    Loop --> CodeWriter
+    CodeWriter -->|Generated code artifact| Executor
+    Executor -->|Execution result<br/>stdout + stderr + reasoning| Reviewer
+    Executor --> Critic
+    Reviewer -->|Auto fixes (if needed)| CodeWriter
+    Critic -->|Feedback bundle| PI
+    Critic -->|Summary & diagnostics| Outputs
+    Executor -->|Logs & scripts| Outputs
+    User -->|Final review / stop conditions| Outputs
+```
+
+## Getting Started
+
+1. **Install dependencies**
 
    ```bash
    pip install -r requirements.txt
    ```
 
-2. Launch the workflow:
+2. **Configure your LLM backend** (`config.py`):
+   - `ollama` for local inference (`LLM_CONFIG["source"] = "ollama"`).
+   - `alcf_sophia` or `alcf_metis` for ALCF vLLM endpoints (authenticate with `python -m agentic_lab_academy.alcf_inference.inference_auth_token authenticate`).
+   - `openrouter` for hosted models (export `OPENROUTER_API_KEY`, optional `OPENROUTER_SITE_URL`, `OPENROUTER_APP_NAME`).
 
-   ```bash
-   python -m agentic_lab_academy.main --topic "Your topic here" --mode both
-   ```
+3. **Set environment-specific knobs**
+   - Provide `--conda_env` when the generated code requires a bespoke Python environment.
+   - Pass `--files_dir`, `--pdfs_dir`, or `--links` so the browsing/research agents have context.
+   - Use `--quick_search` to run only the browsing agent’s DuckDuckGo pass.
 
-   Command-line options mirror the legacy project: provide PDFs, links, file directories, specify `--quick_search`, and set a `--conda_env` for code execution if needed.
+## Local vs. HPC Execution
 
-3. Choose the LLM backend in `config.py` by setting `LLM_CONFIG["source"]` to:
-   - `ollama` (default) – requires a local Ollama service.
-   - `alcf_sophia` or `alcf_metis` – requires prior authentication via `python -m agentic_lab_academy.alcf_inference.inference_auth_token authenticate`.
-   - `openrouter` – provide an `OPENROUTER_API_KEY` (plus optional `OPENROUTER_SITE_URL`/`OPENROUTER_APP_NAME`) to use OpenRouter-hosted models such as `openrouter/polaris-alpha`.
+- **Local (default)** – `CodeExecutorAgent` writes scripts to `workspace_runs/run_<ts>/generated_code/`, runs them with the provided interpreter, captures stdout/stderr, installs missing packages (with LLM-assisted package names), and supplies reasoning back to the coder or reviewer.
 
-4. Follow on-screen prompts to approve the PI-generated plan (and coding plan when requested). Iteration logs, research reports, generated code, and execution outputs are stored under `output_agent/`.
+- **HPC (`--use_hpc`)** – `HPCAgent` takes the coding agent’s script and produces a ALCF Sophia-ready PBS submission:
+  - Inserts directives such as `#PBS -A GeomicVar`, `#PBS -l select=1:system=sophia`, `#PBS -l filesystems=home:grand`, `#PBS -l walltime=01:00:00`, `#PBS -q by-gpu`.
+  - Submits via `qsub`, polls `qstat` at `status_poll_interval` (default 10 s) for up to `status_max_checks` cycles, and reads the generated `hpc_job_iterXX_YY.{out,err}` logs once the job leaves the queue.
+  - Uses the same execution-failure prompt as the local path to explain cluster errors, then loops with `CodeWriterAgent` until the job succeeds or the attempt budget is exhausted.
 
-5. For ALCF Sophia or other HPC submissions, run the CLI with `--use_hpc`. The coding agent still writes the Python training script, but the new `HPCAgent` creates a PBS batch script (stored under `workspace_runs/.../hpc_jobs/`) with directives such as `#PBS -A GeomicVar`, `#PBS -l select=1:system=sophia`, `#PBS -l filesystems=home:grand`, `#PBS -l walltime=01:00:00`, and `#PBS -q by-gpu`, submits it via `qsub`, and records the job ID. After submission, HPCAgent polls `qstat` every 10 seconds (configurable via `status_poll_interval`/`status_max_checks` in `hpc_options`) so you can watch the queue state from the CLI. Once the job leaves the queue, HPCAgent reads the generated `hpc_job_iterXX_YY.out/err` files, reasons about any failures, and feeds that feedback back into the coding agent before submitting the next attempt.
+  Ensure your shell exposes `qsub`/`qstat` (source Sophia’s PBS module) before running with `--use_hpc`.
 
-## Notes
+## Example Invocation
 
-- All files are created within this directory tree to respect the sandboxed environment.
-- The Academy implementation continues to rely on the same LLM prompt engineering as the original project; ensure the selected backend in `config.py` (Ollama or ALCF) is reachable and authenticated.
-- The orchestrator uses a `ThreadPoolExecutor` to offload blocking LLM and subprocess calls while keeping inter-agent communication asynchronous.
+Below is a realistic command that asks the agents to perform Geneformer-style QC on two radiation-level single-cell datasets, record every required AnnData field, and produce QC artifacts. Tweak paths to match your environment.
 
+```bash
+python -m agentic_lab_academy.main \
+  --mode code_only \
+  --conda_env /lus/grand/projects/GeomicVar/tarak/Geneformer_gene46100/Geneformer/geneformer_gene46100_env \
+  --files_dir /grand/GeomicVar/tarak/ai_codes/agentic_lab/GSE255800_extracted \
+  --topic "I want to perform quality control on single-cell datasets exposed to low-dose radiation. Load the two samples in the directory /grand/GeomicVar/tarak/ai_codes/agentic_lab/GSE255800_extracted (GSM8080315 labeled as obs['radiation_level'] = 'control' and GSM8080317 labeled as obs['radiation_level'] = 'r100') and concatenate them into a single AnnData object. Map all genes to Ensembl IDs using the provided GENCODE v47 GTF file, keeping only protein-coding and miRNA biotypes. Ensure that adata.var['ensembl_id'] exists and is correctly populated because later steps require it, and also ensure that adata.obs['n_counts'] exists and contains each cell’s total read count. Apply Geneformer-style QC filtering by keeping cells within 3 standard deviations of the dataset mean for total counts and mitochondrial percentage, and by requiring more than seven detected protein-coding or miRNA Ensembl genes; verify that enough cells remain after filtering. List ALL fields that must exist in adata at every step before generating code. Finally generate violin plots for n_genes_by_counts, total_counts, and pct_counts_mt, saving the cleaned AnnData object as results/qc_filtered_radiation.h5ad, the QC violin plots as results/qc_violins.pdf or .png, and a QC summary CSV at results/qc_stats.csv." \
+  --use_hpc
+```
+
+During the run you will:
+
+1. Approve (or edit) the PI’s research plan.
+2. Approve (or edit) the coding plan.
+3. Review execution logs (local or HPC) and decide when to stop iterating.
+
+Artifacts can be found under `workspace_runs/run_<timestamp>/` (conversation logs, generated code, HPC scripts/logs) and `output_agent/iteration_<n>.{md,py,txt}` for consolidated reports.
+
+## Tips & Troubleshooting
+
+- **LLM tokens** – `llm.py` tracks total token usage; inspect `workspace_runs/run_<ts>/conversation_log_<ts>.jsonl` for per-agent exchanges.
+- **HPC debugging** – If HPCAgent marks a job as failed, open the referenced `hpc_job_iterXX_YY.out/err` files for the full stack trace. The reasoning text shown in the CLI is already fed back into the coding agent for automatic retries.
+- **Custom PBS settings** – adjust `HPCAgent._DEFAULT_OPTIONS` in `academy_agents.py` (queue, walltime, `modules`, etc.) or extend the CLI to pass your preferred overrides.
+- **Extending agents** – prompts live in `prompts.py`; adjust temperatures or prompt templates in `config.py` and `academy_agents.py` as needed.
 
