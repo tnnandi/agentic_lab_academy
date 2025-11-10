@@ -98,3 +98,7 @@ Artifacts can be found under `workspace_runs/run_<timestamp>/` (conversation log
 - **HPC debugging** – If HPCAgent marks a job as failed, open the referenced `hpc_job_iterXX_YY.out/err` files for the full stack trace. The reasoning text shown in the CLI is already fed back into the coding agent for automatic retries.
 - **Custom PBS settings** – adjust `HPCAgent._DEFAULT_OPTIONS` in `academy_agents.py` (queue, walltime, `modules`, etc.) or extend the CLI to pass your preferred overrides.
 - **Extending agents** – prompts live in `prompts.py`; adjust temperatures or prompt templates in `config.py` and `academy_agents.py` as needed.
+
+# To add:
+
+1. BioMCP integration for hypothesis generation 
