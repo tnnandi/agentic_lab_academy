@@ -59,7 +59,7 @@ agentic_lab_academy/
 3. **Set environment-specific knobs**
    - Provide `--conda_env` when the generated code requires a bespoke Python environment.
    - Pass `--files_dir`, `--pdfs_dir`, or `--links` so the browsing/research agents have context.
-   - Use `--quick_search` to run only the browsing agent’s DuckDuckGo pass.
+
 
 ## Local vs. HPC Execution
 
@@ -82,7 +82,6 @@ python -m agentic_lab_academy.main \
   --conda_env /lus/grand/projects/GeomicVar/tarak/Geneformer_gene46100/Geneformer/geneformer_gene46100_env \
   --files_dir /grand/GeomicVar/tarak/ai_codes/agentic_lab/GSE255800_extracted \
   --topic "I want to perform quality control on single-cell datasets exposed to low-dose radiation. Load the two samples in the directory /grand/GeomicVar/tarak/ai_codes/agentic_lab/GSE255800_extracted (GSM8080315 labeled as obs['radiation_level'] = 'control' and GSM8080317 labeled as obs['radiation_level'] = 'r100') and concatenate them into a single AnnData object. Map all genes to Ensembl IDs using the provided GENCODE v47 GTF file, keeping only protein-coding and miRNA biotypes. Ensure that adata.var['ensembl_id'] exists and is correctly populated because later steps require it, and also ensure that adata.obs['n_counts'] exists and contains each cell’s total read count. Apply Geneformer-style QC filtering by keeping cells within 3 standard deviations of the dataset mean for total counts and mitochondrial percentage, and by requiring more than seven detected protein-coding or miRNA Ensembl genes; verify that enough cells remain after filtering. List ALL fields that must exist in adata at every step before generating code. Finally generate violin plots for n_genes_by_counts, total_counts, and pct_counts_mt, saving the cleaned AnnData object as results/qc_filtered_radiation.h5ad, the QC violin plots as results/qc_violins.pdf or .png, and a QC summary CSV at results/qc_stats.csv." \
-  --use_hpc
 ```
 
 During the run you will:
