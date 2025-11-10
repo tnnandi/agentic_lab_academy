@@ -50,8 +50,11 @@ agentic_lab_academy/
 3. Choose the LLM backend in `config.py` by setting `LLM_CONFIG["source"]` to:
    - `ollama` (default) – requires a local Ollama service.
    - `alcf_sophia` or `alcf_metis` – requires prior authentication via `python -m agentic_lab_academy.alcf_inference.inference_auth_token authenticate`.
+   - `openrouter` – provide an `OPENROUTER_API_KEY` (plus optional `OPENROUTER_SITE_URL`/`OPENROUTER_APP_NAME`) to use OpenRouter-hosted models such as `openrouter/polaris-alpha`.
 
 4. Follow on-screen prompts to approve the PI-generated plan (and coding plan when requested). Iteration logs, research reports, generated code, and execution outputs are stored under `output_agent/`.
+
+5. For ALCF Sophia or other HPC submissions, run the CLI with `--use_hpc`. The coding agent still writes the Python training script, but the new `HPCAgent` creates a PBS batch script (stored under `workspace_runs/.../hpc_jobs/`) with directives such as `#PBS -A GeomicVar`, `#PBS -l select=1:system=sophia`, `#PBS -l filesystems=home:grand`, `#PBS -l walltime=01:00:00`, and `#PBS -q by-gpu`, submits it via `qsub`, and records the job ID. After submission, HPCAgent polls `qstat` every 10 seconds (configurable via `status_poll_interval`/`status_max_checks` in `hpc_options`) so you can watch the queue state from the CLI. Once the job leaves the queue, HPCAgent reads the generated `hpc_job_iterXX_YY.out/err` files, reasons about any failures, and feeds that feedback back into the coding agent before submitting the next attempt.
 
 ## Notes
 
@@ -59,6 +62,4 @@ agentic_lab_academy/
 - The Academy implementation continues to rely on the same LLM prompt engineering as the original project; ensure the selected backend in `config.py` (Ollama or ALCF) is reachable and authenticated.
 - The orchestrator uses a `ThreadPoolExecutor` to offload blocking LLM and subprocess calls while keeping inter-agent communication asynchronous.
 
-## License
 
-This codebase inherits the licensing terms of the upstream Agentic Lab project.

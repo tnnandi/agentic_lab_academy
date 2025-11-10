@@ -23,6 +23,7 @@ __all__ = [
     "get_package_resolution_prompt",
     "get_file_path_validation_prompt",
     "get_execution_failure_reasoning_prompt",
+    "get_hpc_job_submission_prompt",
 ]
 
 
@@ -239,6 +240,41 @@ def get_execution_failure_reasoning_prompt(code: str, stdout: str, stderr: str) 
         "3. Verification: <how to confirm the issue is resolved>\n"
         "Return only the above, without any internal reasoning or markdown fences."
     )
+
+def get_hpc_job_submission_prompt(
+    code_file: str,
+    queue: str,
+    account: str,
+    conda_env: str,
+    walltime: str,
+    polling_interval_seconds: int = 10,
+    system: str = "sophia",
+    filesystems: str = "home:grand",
+) -> str:
+    """Prompt text for HPCAgent to submit and monitor a PBS job on ALCF Sophia."""
+
+    return f"""
+    You are HPCAgent, an expert in running GPU workloads on ALCF's Sophia system.
+
+    Your responsibilities:
+    1. Use the Python code already prepared by the Code Agent at '{code_file}'. Do NOT rewrite that code; rely on it as-is.
+
+    2. Create a PBS submission script that includes the following directives exactly:
+       #!/bin/bash
+       #PBS -A {account}
+       #PBS -l select=1:system={system}
+       #PBS -l filesystems={filesystems}
+       #PBS -l walltime={walltime}
+       #PBS -q {queue}
+
+       After the directives, load any required modules, activate the conda environment '{conda_env}', change into the directory containing '{code_file}', and launch the program with an explicit command such as `python {code_file}`.
+
+    3. Submit the job with `qsub`, capture the job ID, and poll the job status every {polling_interval_seconds} seconds using `qstat` (or an equivalent scheduler command). Print the job state to the screen each time until the job completes.
+
+    4. Once the job finishes, display the tail of both the PBS output and error files so the user can confirm the run succeeded.
+
+    Provide the submission script, the exact commands to run, the monitoring loop, and the post-processing steps in a ready-to-execute format.
+    """
 
 
 def get_code_writing_prompt(sources: str, topic: str, plan_section: str, coding_plan: str) -> str:

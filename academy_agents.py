@@ -9,7 +9,7 @@ import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from academy.agent import Agent, action
 
@@ -30,6 +30,7 @@ __all__ = [
     "ResearchAgent",
     "CodeWriterAgent",
     "CodeExecutorAgent",
+    "HPCAgent",
     "CodeReviewerAgent",
     "CriticAgent",
 ]
@@ -326,6 +327,402 @@ class CodeExecutorAgent(Agent):
             error_type=None if result.returncode == 0 else "execution_error",
             packages_installed=packages_installed or None,
             reasoning=reasoning,
+        )
+        return execution.to_dict()
+
+
+class HPCAgent(Agent):
+    """Submit generated scripts to an HPC scheduler instead of running locally."""
+
+    _DEFAULT_OPTIONS: dict[str, Any] = {
+        "scheduler": "pbs",
+        "job_name": "agentic_lab_job",
+        "account": "GeomicVar",
+        "pbs_select": "1:system=sophia",
+        "pbs_filesystems": "home:grand",
+        "pbs_walltime": "01:00:00",
+        "pbs_queue": "by-gpu",
+        "modules": [],
+        "pre_run_commands": [],
+        "submit_command": None,
+        "status_poll_interval": 10,
+        "status_max_checks": 60,
+    }
+
+    def __init__(self, *, verbose: bool = True) -> None:
+        super().__init__()
+        self.verbose = verbose
+        self.submission_counter = 0
+
+    @action
+    async def set_verbose(self, verbose: bool) -> None:
+        self.verbose = verbose
+
+    @staticmethod
+    def _python_executable(conda_env_path: str | None) -> str:
+        if not conda_env_path:
+            return "python"
+        candidates = [
+            Path(conda_env_path) / "bin" / "python",
+            Path(conda_env_path) / "Scripts" / "python.exe",
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return str(candidate)
+        return "python"
+
+    def _merge_options(self, overrides: Mapping[str, Any] | None) -> dict[str, Any]:
+        merged = dict(self._DEFAULT_OPTIONS)
+        if overrides:
+            for key, value in overrides.items():
+                if value is not None:
+                    merged[key] = value
+        return merged
+
+    def _render_job_script(
+        self,
+        *,
+        script_path: Path,
+        working_dir: Path,
+        python_exe: str,
+        options: Mapping[str, Any],
+        stdout_path: Path,
+        stderr_path: Path,
+    ) -> str:
+        directives: list[str] = ["#!/bin/bash"]
+        job_name = options.get("job_name", "agentic_lab_job")
+        directives.append(f"#PBS -N {job_name}")
+        account = options.get("account")
+        if account:
+            directives.append(f"#PBS -A {account}")
+        select = options.get("pbs_select")
+        if select:
+            directives.append(f"#PBS -l select={select}")
+        filesystems = options.get("pbs_filesystems")
+        if filesystems:
+            directives.append(f"#PBS -l filesystems={filesystems}")
+        walltime = options.get("pbs_walltime")
+        if walltime:
+            directives.append(f"#PBS -l walltime={walltime}")
+        queue = options.get("pbs_queue")
+        if queue:
+            directives.append(f"#PBS -q {queue}")
+        directives.append(f"#PBS -o {stdout_path}")
+        directives.append(f"#PBS -e {stderr_path}")
+
+        body: list[str] = ["set -euo pipefail", f"cd {working_dir}"]
+        modules: Sequence[str] = options.get("modules", []) or []
+        for module in modules:
+            body.append(f"module load {module}")
+
+        for command in options.get("pre_run_commands", []) or []:
+            body.append(command)
+
+        body.append(f"{python_exe} {script_path}")
+        return "\n".join(directives + ["", *body]) + "\n"
+
+    def _write_job_script(
+        self,
+        *,
+        script_contents: str,
+        working_dir: Path,
+        iteration: int,
+    ) -> Path:
+        job_dir = working_dir / "hpc_jobs"
+        job_dir.mkdir(exist_ok=True)
+        job_script = job_dir / f"iteration_{iteration:02d}_{self.submission_counter:02d}.sh"
+        job_script.write_text(script_contents)
+        return job_script
+
+    async def _run_subprocess(self, command: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: subprocess.run(
+                command,
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+            ),
+        )
+
+    @staticmethod
+    def _submit_command(job_script: Path, options: Mapping[str, Any]) -> list[str]:
+        custom = options.get("submit_command")
+        if custom:
+            return [str(arg) for arg in custom]
+
+        scheduler = (options.get("scheduler") or "pbs").lower()
+        if scheduler == "pbs":
+            return ["qsub", str(job_script)]
+        raise ValueError(f"Unsupported scheduler '{scheduler}'. Provide submit_command override.")
+
+    @staticmethod
+    def _extract_job_id(stdout: str, stderr: str) -> str | None:
+        text = "\n".join(filter(None, [stdout, stderr]))
+        patterns = [
+            re.compile(r"Submitted batch job (\S+)", re.IGNORECASE),
+            re.compile(r"JobID[:\s]+(\S+)", re.IGNORECASE),
+            re.compile(r"submitted as job (\S+)", re.IGNORECASE),
+            re.compile(r"^(\d+\.\S+)$", re.IGNORECASE),
+            re.compile(r"^(\d+)$", re.IGNORECASE),
+        ]
+        for pattern in patterns:
+            match = pattern.search(text)
+            if match:
+                return match.group(1)
+        return None
+
+    @staticmethod
+    def _status_command(job_id: str, options: Mapping[str, Any]) -> list[str] | None:
+        scheduler = (options.get("scheduler") or "pbs").lower()
+        if scheduler == "pbs":
+            return ["qstat", job_id]
+        return None
+
+    @staticmethod
+    def _job_still_listed(
+        job_id: str,
+        scheduler: str,
+        stdout: str,
+        stderr: str,
+        returncode: int,
+    ) -> bool:
+        scheduler = scheduler.lower()
+        text = "\n".join(filter(None, [stdout, stderr]))
+        if scheduler == "pbs":
+            if returncode != 0:
+                return False
+            if job_id in text:
+                return True
+            return bool(text.strip())
+        return bool(text.strip())
+
+    async def _poll_job(
+        self,
+        *,
+        job_id: str,
+        working_dir: Path,
+        options: Mapping[str, Any],
+    ) -> str | None:
+        status_cmd = self._status_command(job_id, options)
+        if not status_cmd:
+            if self.verbose:
+                print("HPCAgent: no status command configured; skipping polling.")
+            return None
+
+        interval = int(options.get("status_poll_interval", 10))
+        max_checks = int(options.get("status_max_checks", 60))
+        scheduler = (options.get("scheduler") or "pbs").lower()
+
+        for check in range(1, max_checks + 1):
+            result = await self._run_subprocess(status_cmd, working_dir)
+            stdout = result.stdout.strip()
+            stderr = result.stderr.strip()
+            if self.verbose:
+                print(
+                    f"HPCAgent status check {check}/{max_checks} for job {job_id} (scheduler={scheduler}):"
+                )
+                display_stdout = stdout or "(no stdout from status command)"
+                if len(display_stdout) > 2000:
+                    display_stdout = display_stdout[:2000] + "... [truncated]"
+                print(display_stdout)
+                if stderr:
+                    display_stderr = stderr
+                    if len(display_stderr) > 2000:
+                        display_stderr = display_stderr[:2000] + "... [truncated]"
+                    print("[stderr]", display_stderr)
+
+            still_running = self._job_still_listed(job_id, scheduler, stdout, stderr, result.returncode)
+            if not still_running:
+                if self.verbose:
+                    print(f"HPCAgent: job {job_id} no longer appears in queue output.")
+                return "completed"
+
+            await asyncio.sleep(max(interval, 1))
+
+        if self.verbose:
+            print(
+                f"HPCAgent: job {job_id} still listed after {max_checks} checks; leaving further monitoring to the user."
+            )
+        return "timeout"
+
+    @staticmethod
+    def _safe_read_file(path: Path, *, max_chars: int = 20000) -> str:
+        try:
+            data = path.read_text()
+        except FileNotFoundError:
+            return ""
+        if len(data) > max_chars:
+            return data[-max_chars:]
+        return data
+
+    @staticmethod
+    def _logs_suggest_success(stdout: str, stderr: str) -> bool:
+        if stdout.strip() and not stderr.strip():
+            lowered = stdout.lower()
+            failure_tokens = ["error", "traceback", "exception", "fail", "segmentation fault"]
+            if any(token in lowered for token in failure_tokens):
+                return False
+            return True
+        if not stdout and not stderr:
+            return False
+        combined = f"{stdout}\n{stderr}".lower()
+        failure_tokens = ["error", "traceback", "exception", "fail", "segmentation fault"]
+        return not any(token in combined for token in failure_tokens)
+
+    @staticmethod
+    def _format_job_details(job_id: str | None, job_state: str | None, exit_status: int | None) -> str:
+        details: list[str] = []
+        if job_id:
+            details.append(f"job id: {job_id}")
+        if job_state:
+            details.append(f"state: {job_state}")
+        if exit_status is not None:
+            details.append(f"exit_status: {exit_status}")
+        return ", ".join(details) if details else "job metadata unavailable"
+
+    async def _fetch_job_metadata(
+        self, job_id: str, working_dir: Path
+    ) -> tuple[str | None, int | None, str, str]:
+        cmd = ["qstat", "-fx", job_id]
+        result = await self._run_subprocess(cmd, working_dir)
+        if result.returncode != 0:
+            return None, None, result.stdout.strip(), result.stderr.strip()
+        text = result.stdout
+        job_state = None
+        match_state = re.search(r"job_state\s*=\s*(\w+)", text)
+        if match_state:
+            job_state = match_state.group(1)
+        exit_status = None
+        match_exit = re.search(r"exit_status\s*=\s*(-?\d+)", text)
+        if not match_exit:
+            match_exit = re.search(r"Exit_status\s*=\s*(-?\d+)", text)
+        if match_exit:
+            try:
+                exit_status = int(match_exit.group(1))
+            except ValueError:
+                exit_status = None
+        return job_state, exit_status, result.stdout.strip(), result.stderr.strip()
+
+    async def _analyze_failure(self, code: str | None, stdout: str, stderr: str) -> str:
+        source = code or "# Code unavailable for analysis."
+        prompt = prompts.get_execution_failure_reasoning_prompt(source, stdout, stderr)
+        return await query_llm_async(prompt, temperature=LLM_CONFIG["temperature"]["execution"])
+
+    @action
+    async def submit_job(
+        self,
+        *,
+        script_path: str,
+        working_directory: str,
+        iteration: int,
+        code: str | None = None,
+        conda_env_path: str | None = None,
+        hpc_options: Mapping[str, Any] | None = None,
+    ) -> dict:
+        self.submission_counter += 1
+        workdir = Path(working_directory)
+        workdir.mkdir(parents=True, exist_ok=True)
+        python_script = Path(script_path)
+        if not python_script.exists():
+            raise FileNotFoundError(f"Python script not found for HPC submission: {python_script}")
+        options = self._merge_options(hpc_options)
+        python_exe = self._python_executable(conda_env_path)
+        log_basename = f"hpc_job_iter{iteration:02d}_{self.submission_counter:02d}"
+        stdout_path = workdir / f"{log_basename}.out"
+        stderr_path = workdir / f"{log_basename}.err"
+        for path in (stdout_path, stderr_path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                path.unlink()
+        script_contents = self._render_job_script(
+            script_path=python_script,
+            working_dir=workdir,
+            python_exe=python_exe,
+            options=options,
+            stdout_path=stdout_path,
+            stderr_path=stderr_path,
+        )
+        job_script = self._write_job_script(
+            script_contents=script_contents,
+            working_dir=workdir,
+            iteration=iteration,
+        )
+
+        submit_cmd = self._submit_command(job_script, options)
+        if self.verbose:
+            print("HPCAgent submitting job with command:", " ".join(submit_cmd))
+
+        result = await self._run_subprocess(submit_cmd, workdir)
+        job_id = self._extract_job_id(result.stdout, result.stderr)
+        if self.verbose:
+            if job_id:
+                print(f"HPCAgent submitted job {job_id}")
+            else:
+                print("HPCAgent submission output:", result.stdout.strip())
+
+        submission_ok = result.returncode == 0
+        final_status: str | None = None
+        if submission_ok and job_id:
+            final_status = await self._poll_job(job_id=job_id, working_dir=workdir, options=options)
+        log_stdout = ""
+        log_stderr = ""
+        job_state: str | None = None
+        exit_status: int | None = None
+        metadata_stdout = ""
+        metadata_stderr = ""
+
+        if submission_ok and final_status == "completed":
+            log_stdout = self._safe_read_file(stdout_path)
+            log_stderr = self._safe_read_file(stderr_path)
+            if job_id:
+                job_state, exit_status, metadata_stdout, metadata_stderr = await self._fetch_job_metadata(
+                    job_id, workdir
+                )
+
+        if not log_stdout:
+            log_stdout = metadata_stdout or result.stdout
+        if not log_stderr:
+            log_stderr = metadata_stderr or result.stderr
+
+        job_success = False
+        if submission_ok and final_status == "completed":
+            if exit_status is not None:
+                job_success = exit_status == 0
+            else:
+                job_success = self._logs_suggest_success(log_stdout, log_stderr)
+
+        details = self._format_job_details(job_id, job_state, exit_status)
+
+        if not submission_ok:
+            reasoning = "HPC submission failed; see stderr for details"
+            error_type = "hpc_submission_failed"
+        elif final_status == "timeout":
+            reasoning = f"{details}; monitoring window ended while job remained in the queue"
+            error_type = "hpc_submission_pending"
+        elif final_status != "completed":
+            reasoning = f"{details}; job status could not be confirmed"
+            error_type = "hpc_submission_pending"
+        elif job_success:
+            reasoning = f"HPC job completed successfully ({details})."
+            error_type = "hpc_job_succeeded"
+        else:
+            failure_analysis = await self._analyze_failure(code, log_stdout, log_stderr)
+            reasoning = (
+                f"HPC job completed but reported a failure ({details}).\n"
+                f"Failure analysis:\n{failure_analysis.strip()}"
+            )
+            error_type = "hpc_job_failed"
+
+        execution = ExecutionResult(
+            success=job_success if (submission_ok and final_status == "completed") else False,
+            stdout=log_stdout,
+            stderr=log_stderr,
+            error_type=error_type,
+            packages_installed=None,
+            reasoning=reasoning,
+            job_id=job_id,
         )
         return execution.to_dict()
 

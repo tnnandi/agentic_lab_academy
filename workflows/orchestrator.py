@@ -23,6 +23,7 @@ try:
     from ..academy_agents import (
         BrowsingAgent,
         CodeExecutorAgent,
+        HPCAgent,
         CodeReviewerAgent,
         CodeWriterAgent,
         CriticAgent,
@@ -36,6 +37,7 @@ except ImportError:
     from academy_agents import (
         BrowsingAgent,
         CodeExecutorAgent,
+        HPCAgent,
         CodeReviewerAgent,
         CodeWriterAgent,
         CriticAgent,
@@ -66,6 +68,7 @@ async def run_workflow(
     files_dir: str | None,
     conda_env: str | None,
     verbose: bool = True,
+    use_hpc: bool = False,
 ) -> None:
     
     def _format_pi_changes(feedback: CritiqueBundle | None) -> str | None:
@@ -101,6 +104,16 @@ async def run_workflow(
     run_dir = workspace_root / f"run_{timestamp}"
     run_dir.mkdir(exist_ok=True)
     conversation_log_path = run_dir / f"conversation_log_{timestamp}.jsonl"
+    hpc_script_counter = 0
+
+    def _materialize_hpc_script(code: str, iteration_idx: int) -> Path:
+        nonlocal hpc_script_counter
+        hpc_script_counter += 1
+        scripts_dir = run_dir / "generated_code"
+        scripts_dir.mkdir(exist_ok=True)
+        script_path = scripts_dir / f"hpc_iteration_{iteration_idx:02d}_{hpc_script_counter:02d}.py"
+        script_path.write_text(code)
+        return script_path
 
     def _log_event(role: str, message: str, iteration_idx: int | None = None, metadata: dict | None = None) -> None:
         utils.append_conversation_log(
@@ -125,8 +138,9 @@ async def run_workflow(
         code_executor = await manager.launch(CodeExecutorAgent)
         code_reviewer = await manager.launch(CodeReviewerAgent)
         critic = await manager.launch(CriticAgent)
+        hpc_agent = await manager.launch(HPCAgent) if use_hpc else None
 
-        await asyncio.gather(
+        tasks = [
             pi.configure(verbose=verbose, max_rounds=MAX_ROUNDS),
             browsing.set_verbose(verbose),
             research.set_verbose(verbose),
@@ -134,7 +148,10 @@ async def run_workflow(
             code_executor.set_verbose(verbose),
             code_reviewer.set_verbose(verbose),
             critic.set_verbose(verbose),
-        )
+        ]
+        if hpc_agent:
+            tasks.append(hpc_agent.set_verbose(verbose))
+        await asyncio.gather(*tasks)
 
         if quick_search:
             search_result = await browsing.quick_search(topic)
@@ -268,85 +285,166 @@ async def run_workflow(
                 execution_result: ExecutionResult | None = None
                 execution_transcript = ""
 
-                for attempt in range(1, MAX_EXECUTION_ATTEMPTS + 1):
-                    exec_dict = await code_executor.execute_code(
-                        code=code_artifact.code,
-                        working_directory=str(run_dir),
-                        iteration=iteration,
-                        conda_env_path=conda_env,
-                    )
-                    execution_result = ExecutionResult.from_dict(exec_dict)
-                    executor_reasoning_note = (
-                        execution_result.reasoning
-                        or f"Execution attempt {attempt} "
-                        f"{'succeeded' if execution_result.success else 'failed without detailed reasoning.'}"
-                    )
-
-                    execution_transcript = (
-                        f"SUCCESS: {execution_result.success}\n"
-                        f"STDOUT:\n{execution_result.stdout}\n\n"
-                        f"STDERR:\n{execution_result.stderr}\n\n"
-                        f"PACKAGES_INSTALLED: {execution_result.packages_installed or []}\n"
-                    )
-                    _log_event(
-                        "CodeExecutorAgent",
-                        "Execution attempt completed.",
-                        iteration,
-                        {
-                            "attempt": attempt,
-                            "success": execution_result.success,
-                            "reasoning": execution_result.reasoning,
-                            "stdout": execution_result.stdout[:1000],
-                            "stderr": execution_result.stderr[:1000],
-                        },
-                    )
-
-                    if execution_result.success:
-                        break
-
-                    reasoning_text = execution_result.reasoning or "No automated reasoning available."
-                    print("CodeExecutorAgent analysis of failure:\n", reasoning_text, "\n")
-
-                    feedback = (
-                        f"The execution attempt {attempt}/{MAX_EXECUTION_ATTEMPTS} failed.\n"
-                        "Executor analysis:\n"
-                        f"{reasoning_text}\n\n"
-                        "Execution transcript:\n"
-                        f"{execution_transcript}"
-                    )
-
-                    improved_dict = await code_writer.improve_code(
-                        code=code_artifact.code,
-                        feedback=feedback,
-                        iteration=iteration,
-                    )
-                    improved_artifact = CodeArtifact.from_dict(improved_dict)
-
-                    if improved_artifact.code == code_artifact.code:
-                        # No progress from code writer; rely on reviewer fallback below.
-                        break
-
-                    code_artifact = improved_artifact
-                    _log_event(
-                        "CodeWriterAgent",
-                        "Refined code artifact after executor feedback.",
-                        iteration,
-                        {"code_preview": code_artifact.code[:600]},
-                    )
-
-                    # set_trace()
-
-                if execution_result and not execution_result.success:
-                    review = await code_reviewer.review_code(code_artifact.code, execution_transcript)
-                    improved_code = utils.extract_code_only(review)
-                    if improved_code and improved_code != code_artifact.code:
-                        code_artifact = CodeArtifact(code=improved_code, iteration=iteration)
+                if use_hpc:
+                    if not hpc_agent:
+                        raise RuntimeError("HPCAgent not initialized despite --use_hpc flag.")
+                    for attempt in range(1, MAX_EXECUTION_ATTEMPTS + 1):
+                        script_path = _materialize_hpc_script(code_artifact.code, iteration)
+                        exec_dict = await hpc_agent.submit_job(
+                            script_path=str(script_path),
+                            working_directory=str(run_dir),
+                            iteration=iteration,
+                            code=code_artifact.code,
+                            conda_env_path=conda_env,
+                        )
+                        execution_result = ExecutionResult.from_dict(exec_dict)
+                        executor_reasoning_note = (
+                            execution_result.reasoning
+                            or "HPC job submitted; awaiting cluster execution results."
+                        )
+                        execution_transcript = (
+                            f"HPC attempt {attempt}: success={execution_result.success}\n"
+                            f"JOB_ID: {execution_result.job_id or 'unknown'}\n"
+                            f"STDOUT:\n{execution_result.stdout}\n\n"
+                            f"STDERR:\n{execution_result.stderr}\n"
+                        )
                         _log_event(
-                            "CodeReviewerAgent",
-                            "Reviewer adjusted code after failed execution.",
+                            "HPCAgent",
+                            "HPC attempt completed.",
+                            iteration,
+                            {
+                                "attempt": attempt,
+                                "job_id": execution_result.job_id,
+                                "success": execution_result.success,
+                                "reasoning": execution_result.reasoning,
+                                "error_type": execution_result.error_type,
+                                "stdout": execution_result.stdout[:1000],
+                                "stderr": execution_result.stderr[:1000],
+                            },
+                        )
+
+                        if execution_result.error_type == "hpc_submission_pending":
+                            print(
+                                "HPCAgent monitoring window ended while the job is still queued; please monitor it manually."
+                            )
+                            break
+
+                        if execution_result.success:
+                            break
+
+                        reasoning_text = execution_result.reasoning or "No automated reasoning available."
+                        print("HPCAgent analysis of failure:\n", reasoning_text, "\n")
+
+                        feedback = (
+                            f"The HPC execution attempt {attempt}/{MAX_EXECUTION_ATTEMPTS} failed.\n"
+                            "Executor analysis:\n"
+                            f"{reasoning_text}\n\n"
+                            "Execution transcript:\n"
+                            f"{execution_transcript}"
+                        )
+
+                        improved_dict = await code_writer.improve_code(
+                            code=code_artifact.code,
+                            feedback=feedback,
+                            iteration=iteration,
+                        )
+                        improved_artifact = CodeArtifact.from_dict(improved_dict)
+
+                        if improved_artifact.code == code_artifact.code:
+                            break
+
+                        code_artifact = improved_artifact
+                        _log_event(
+                            "CodeWriterAgent",
+                            "Refined code artifact after HPC feedback.",
                             iteration,
                             {"code_preview": code_artifact.code[:600]},
                         )
+                else:
+                    for attempt in range(1, MAX_EXECUTION_ATTEMPTS + 1):
+                        exec_dict = await code_executor.execute_code(
+                            code=code_artifact.code,
+                            working_directory=str(run_dir),
+                            iteration=iteration,
+                            conda_env_path=conda_env,
+                        )
+                        execution_result = ExecutionResult.from_dict(exec_dict)
+                        executor_reasoning_note = (
+                            execution_result.reasoning
+                            or f"Execution attempt {attempt} "
+                            f"{'succeeded' if execution_result.success else 'failed without detailed reasoning.'}"
+                        )
+
+                        execution_transcript = (
+                            f"SUCCESS: {execution_result.success}\n"
+                            f"STDOUT:\n{execution_result.stdout}\n\n"
+                            f"STDERR:\n{execution_result.stderr}\n\n"
+                            f"PACKAGES_INSTALLED: {execution_result.packages_installed or []}\n"
+                        )
+                        _log_event(
+                            "CodeExecutorAgent",
+                            "Execution attempt completed.",
+                            iteration,
+                            {
+                                "attempt": attempt,
+                                "success": execution_result.success,
+                                "reasoning": execution_result.reasoning,
+                                "stdout": execution_result.stdout[:1000],
+                                "stderr": execution_result.stderr[:1000],
+                            },
+                        )
+
+                        if execution_result.success:
+                            break
+
+                        reasoning_text = execution_result.reasoning or "No automated reasoning available."
+                        print("CodeExecutorAgent analysis of failure:\n", reasoning_text, "\n")
+
+                        feedback = (
+                            f"The execution attempt {attempt}/{MAX_EXECUTION_ATTEMPTS} failed.\n"
+                            "Executor analysis:\n"
+                            f"{reasoning_text}\n\n"
+                            "Execution transcript:\n"
+                            f"{execution_transcript}"
+                        )
+
+                        improved_dict = await code_writer.improve_code(
+                            code=code_artifact.code,
+                            feedback=feedback,
+                            iteration=iteration,
+                        )
+                        improved_artifact = CodeArtifact.from_dict(improved_dict)
+
+                        if improved_artifact.code == code_artifact.code:
+                            # No progress from code writer; rely on reviewer fallback below.
+                            break
+
+                        code_artifact = improved_artifact
+                        _log_event(
+                            "CodeWriterAgent",
+                            "Refined code artifact after executor feedback.",
+                            iteration,
+                            {"code_preview": code_artifact.code[:600]},
+                        )
+
+                        # set_trace()
+
+                if execution_result and not execution_result.success:
+                    allow_reviewer = (
+                        not use_hpc
+                        or execution_result.error_type in {"hpc_job_failed", "hpc_submission_failed"}
+                    )
+                    if allow_reviewer:
+                        review = await code_reviewer.review_code(code_artifact.code, execution_transcript)
+                        improved_code = utils.extract_code_only(review)
+                        if improved_code and improved_code != code_artifact.code:
+                            code_artifact = CodeArtifact(code=improved_code, iteration=iteration)
+                            _log_event(
+                                "CodeReviewerAgent",
+                                "Reviewer adjusted code after failed execution.",
+                                iteration,
+                                {"code_preview": code_artifact.code[:600]},
+                            )
 
             else:
                 execution_transcript = None
@@ -406,6 +504,10 @@ async def run_workflow(
 
             if execution_result and execution_result.success:
                 print("Code executed successfully. Stopping iterations.")
+                break
+
+            if use_hpc and execution_result and execution_result.error_type == "hpc_submission_pending":
+                print("HPC job is still queued or monitoring timed out; please watch the cluster queue.")
                 break
 
     executor.shutdown(wait=False)

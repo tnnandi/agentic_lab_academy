@@ -48,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional path to a conda environment for code execution (e.g., /path/to/env).",
     )
     parser.add_argument(
+        "--use_hpc",
+        action="store_true",
+        help="Submit generated code to the HPCAgent (e.g., ALCF Sophia) instead of running locally.",
+    )
+    parser.add_argument(
         "--no-verbose",
         dest="verbose",
         action="store_false",
@@ -86,6 +91,7 @@ async def _run_from_args(args: argparse.Namespace) -> None:
         conda_env=args.conda_env,
         verbose=True,
         # verbose=args.verbose,
+        use_hpc=args.use_hpc,
     )
 
 

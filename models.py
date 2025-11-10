@@ -53,6 +53,7 @@ class ExecutionResult(SerializableDataclass):
     error_type: Optional[str] = None
     packages_installed: Optional[list[str]] = None
     reasoning: Optional[str] = None
+    job_id: Optional[str] = None
 
 
 @dataclass(slots=True)
