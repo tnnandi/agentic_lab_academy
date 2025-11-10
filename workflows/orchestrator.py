@@ -96,9 +96,11 @@ async def run_workflow(
     if files_dir:
         files_dir_content = await _to_thread(utils.explore_files_directory, files_dir)
 
-    workdir = Path.cwd() / "workspace_runs"
-    workdir.mkdir(exist_ok=True)
-    conversation_log_path = workdir / f"conversation_log_{timestamp}.jsonl"
+    workspace_root = Path.cwd() / "workspace_runs"
+    workspace_root.mkdir(exist_ok=True)
+    run_dir = workspace_root / f"run_{timestamp}"
+    run_dir.mkdir(exist_ok=True)
+    conversation_log_path = run_dir / f"conversation_log_{timestamp}.jsonl"
 
     def _log_event(role: str, message: str, iteration_idx: int | None = None, metadata: dict | None = None) -> None:
         utils.append_conversation_log(
@@ -110,7 +112,7 @@ async def run_workflow(
         )
 
     if verbose:
-        print("Workspace for generated scripts:", workdir)
+        print("Workspace for generated scripts:", run_dir)
 
     executor = ThreadPoolExecutor(max_workers=8)
     async with await Manager.from_exchange_factory(
@@ -269,7 +271,7 @@ async def run_workflow(
                 for attempt in range(1, MAX_EXECUTION_ATTEMPTS + 1):
                     exec_dict = await code_executor.execute_code(
                         code=code_artifact.code,
-                        working_directory=str(workdir),
+                        working_directory=str(run_dir),
                         iteration=iteration,
                         conda_env_path=conda_env,
                     )

@@ -50,6 +50,8 @@ def query_llm(prompt: str, model: str | None = None, temperature: float | None =
         text, tokens = _query_ollama(prompt, model_name, request_temperature)
     elif source in {"alcf_sophia", "alcf_metis"}:
         text, tokens = _query_alcf(prompt, model_name, request_temperature, source)
+    elif source == "openrouter":
+        text, tokens = _query_openrouter(prompt, model_name, request_temperature)
     else:
         raise ValueError(f"Unsupported LLM source: {source}")
 
@@ -109,6 +111,30 @@ def _query_alcf(
     tokens = int(getattr(usage, "total_tokens", 0)) if usage else 0
     return text, tokens
 
+
+def _query_openrouter(prompt: str, model_name: str, temperature: float) -> Tuple[str, int]:
+    api_key = os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
+        raise RuntimeError("Set OPENROUTER_API_KEY before using the OpenRouter backend.")
+
+    headers = {
+        "HTTP-Referer": os.environ.get("OPENROUTER_SITE_URL", ""),
+        "X-Title": os.environ.get("OPENROUTER_APP_NAME", "Agentic Lab Academy"),
+    }
+    headers = {k: v for k, v in headers.items() if v}
+
+    base_url = LLM_CONFIG.get("openrouter", {}).get("base_url", "https://openrouter.ai/api/v1")
+    client = OpenAI(api_key=api_key, base_url=base_url, default_headers=headers or None)
+
+    response = client.chat.completions.create(
+        model=model_name,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=temperature,
+    )
+    text = response.choices[0].message.content.strip()
+    usage = getattr(response, "usage", None)
+    tokens = int(getattr(usage, "total_tokens", 0)) if usage else 0
+    return text, tokens
 
 async def query_llm_async(prompt: str, model: str | None = None, temperature: float | None = None) -> str:
     """Asynchronously query the LLM by delegating to a background thread."""
