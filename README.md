@@ -39,40 +39,9 @@ agentic_lab_academy/
 - **Code Reviewer Agent** – inspects unsuccessful execution transcripts and proposes automated patches when the coding agent stalls.
 - **Critic Agent** – consolidates research quality, code health, and executor diagnostics into feedback that seeds the next PI plan.
 
-## Information Flow & Human Touchpoints
+## Information Flow 
 
-```mermaid
-flowchart TD
-    User(("User<br/>CLI prompts & approvals"))
-    PI(("Principal Investigator Agent"))
-    Loop(("Human-in-the-loop<br/>Plan & Coding approvals"))
-    Browse(("Browsing Agent"))
-    Research(("Research Agent"))
-    CodeWriter(("Code Writer Agent"))
-    Executor(("Code Executor Agent<br/>(local or HPC)"))
-    Reviewer(("Code Reviewer Agent"))
-    Critic(("Critic Agent"))
-    Outputs(("Workspace Outputs<br/>reports / code / logs"))
-
-    User -->|Provide topic, PDFs, options| PI
-    User -->|Approve PI plan<br/>or request changes| Loop
-    Loop --> PI
-    PI -->|Plan & reasoning| Browse
-    Browse -->|Sources summary| PI
-    Browse --> Research
-    Research -->|Draft / improved report| Outputs
-    PI -->|Plan section| CodeWriter
-    User -->|Approve coding plan<br/>or give feedback| Loop
-    Loop --> CodeWriter
-    CodeWriter -->|Generated code artifact| Executor
-    Executor -->|Execution result<br/>stdout + stderr + reasoning| Reviewer
-    Executor --> Critic
-    Reviewer -->|Auto fixes (if needed)| CodeWriter
-    Critic -->|Feedback bundle| PI
-    Critic -->|Summary & diagnostics| Outputs
-    Executor -->|Logs & scripts| Outputs
-    User -->|Final review / stop conditions| Outputs
-```
+![Agentic Lab Academy schematic](figs/agentic_lab_academy_schematic.png)
 
 ## Getting Started
 
@@ -130,4 +99,3 @@ Artifacts can be found under `workspace_runs/run_<timestamp>/` (conversation log
 - **HPC debugging** – If HPCAgent marks a job as failed, open the referenced `hpc_job_iterXX_YY.out/err` files for the full stack trace. The reasoning text shown in the CLI is already fed back into the coding agent for automatic retries.
 - **Custom PBS settings** – adjust `HPCAgent._DEFAULT_OPTIONS` in `academy_agents.py` (queue, walltime, `modules`, etc.) or extend the CLI to pass your preferred overrides.
 - **Extending agents** – prompts live in `prompts.py`; adjust temperatures or prompt templates in `config.py` and `academy_agents.py` as needed.
-
