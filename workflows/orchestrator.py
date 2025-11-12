@@ -30,7 +30,7 @@ try:
         PrincipalInvestigatorAgent,
         ResearchAgent,
     )
-    from ..config import MAX_ROUNDS
+    from ..config import MAX_ROUNDS, MAX_EXECUTION_ATTEMPTS
     from ..models import CodeArtifact, CritiqueBundle, ExecutionResult, PlanResult, ResearchArtifact
     from .. import utils
 except ImportError:
@@ -44,12 +44,12 @@ except ImportError:
         PrincipalInvestigatorAgent,
         ResearchAgent,
     )
-    from config import MAX_ROUNDS
+    from config import MAX_ROUNDS, MAX_EXECUTION_ATTEMPTS
     from models import CodeArtifact, CritiqueBundle, ExecutionResult, PlanResult, ResearchArtifact
     import utils
 
 
-MAX_EXECUTION_ATTEMPTS = 3 # Number of loops between the code executor and the code writer agent
+
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 

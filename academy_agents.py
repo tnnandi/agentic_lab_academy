@@ -340,7 +340,7 @@ class HPCAgent(Agent):
         "account": "GeomicVar",
         "pbs_select": "1:system=sophia",
         "pbs_filesystems": "home:grand",
-        "pbs_walltime": "01:00:00",
+        "pbs_walltime": "05:00:00",
         "pbs_queue": "by-gpu",
         "modules": [],
         "pre_run_commands": [],

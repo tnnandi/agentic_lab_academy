@@ -1,6 +1,7 @@
 """Configuration for the Academy-powered Agentic Lab with flexible LLM backends."""
 
 MAX_ROUNDS = 3
+MAX_EXECUTION_ATTEMPTS = 5 # Number of loops between the code executor and the code writer agent
 
 # Supported sources:
 #   - "ollama": local Ollama REST API (default)
